@@ -59,7 +59,13 @@ module Rack
       end
 
       info.duration = Time.now - ready_time
-      response = Rack::Response.new("<response><errors>Service Unavailable</errors></response>", 503) if response.first == 500
+      if response.first == 500
+        request = Rack::Request.new(env)
+        exception  = Exception.new(response[2][0])
+        track_exception_with_graylog2(exception, 503, request)
+        track_exception_with_newrelic(exception, request)
+        response = Rack::Response.new("<response><errors>Service Unavailable</errors></response>", 503)
+      end 
       Rack::Timeout._set_state! env, :completed
       response
     end
@@ -77,7 +83,6 @@ module Rack
       return false if env['CONTENT_LENGTH'].to_i.zero?
       true
     end
-
 
     ### state change notification-related methods
 
@@ -114,5 +119,32 @@ module Rack
       @state_change_observers.values.each { |observer| observer.send(OBSERVER_CALLBACK_METHOD_NAME, env) }
     end
 
+    # Send exception notification and backtrace to Graylog
+    #
+    # exception - Exception instance
+    #
+    # Returns nil
+    def track_exception_with_graylog2(exception = nil, code, request)
+      return if exception.nil?
+      begin
+        GrayMetrics.track_error(request: request, full_message: exception.try(:message), override_attributes: { _code: code, _status: code })          
+      rescue
+        Rails.logger.info "Unable to log in Graylog #{$!.inspect}"
+      end
+      
+    end
+    
+    # Send exception notifaction to NewRelic explicity
+    #
+    # exception - nil or Exception instance
+    #
+    # Returns nil
+    def track_exception_with_newrelic(exception = nil, request)
+      begin
+        NewRelic::Agent.instance.error_collector.notice_error(exception, uri: request.path, referer: request.referer, request_params: request.params)
+      rescue
+        Rails.logger.info "Unable to log error in NewRelic for #{$!.inspect}"
+      end
+    end
   end
 end
