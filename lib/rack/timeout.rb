@@ -59,6 +59,7 @@ module Rack
       end
 
       info.duration = Time.now - ready_time
+      response = Rack::Response.new("<response><errors>Service Unavailable</errors></response>", 503) if response.first == 500
       Rack::Timeout._set_state! env, :completed
       response
     end
